@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Baby Monitor</title>
+<style>
+:root{--bg:#fff;--fg:#1a1a1a;--card:#f1f1f5;--ac:#4f46e5;--mut:#666;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#111;--fg:#eee;--card:#1e1e26;--ac:#818cf8;--mut:#999}}
+:root[data-theme="dark"]{--bg:#111;--fg:#eee;--card:#1e1e26;--ac:#818cf8;--mut:#999}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+body{background:var(--bg);color:var(--fg);font:16px/1.4 system-ui,sans-serif;margin:0 auto;padding:16px;max-width:480px}
+h1{font-size:22px;margin:8px 0 4px}p{color:var(--mut);margin:4px 0 12px}
+.card{background:var(--card);border-radius:14px;padding:14px;margin:12px 0}
+button{background:var(--ac);color:#fff;border:0;border-radius:10px;padding:14px;font-size:16px;width:100%;margin:6px 0}
+button.s{background:transparent;color:var(--ac);border:1px solid var(--ac)}
+textarea{width:100%;height:90px;box-sizing:border-box;border-radius:8px;border:1px solid var(--mut);background:var(--bg);color:var(--fg);font:12px monospace;padding:8px}
+.hide{display:none}.st{font-weight:600}
+</style></head><body>
+<h1>Baby Monitor</h1>
+<p>Direct phone-to-phone audio. No server, nothing recorded.</p>
+
+<div id="home" class="card">
+  <button onclick="startBaby()">This is the baby phone</button>
+  <button class="s" onclick="showParent()">This is the parent phone</button>
+</div>
+
+<div id="baby" class="card hide">
+  <b>Baby phone</b>
+  <p>1. Send this code to the parent phone.</p>
+  <textarea id="offerOut" readonly></textarea>
+  <button class="s" onclick="copy('offerOut')">Copy / share code</button>
+  <p>2. Paste the parent's reply code here.</p>
+  <textarea id="ansIn" placeholder="Paste reply code"></textarea>
+  <button onclick="finishBaby()">Connect</button>
+</div>
+
+<div id="parent" class="card hide">
+  <b>Parent phone</b>
+  <p>1. Paste the baby phone's code.</p>
+  <textarea id="offerIn" placeholder="Paste code from baby phone"></textarea>
+  <button onclick="startParent()">Create reply code</button>
+  <div id="replyBox" class="hide">
+    <p>2. Send this reply back to the baby phone.</p>
+    <textarea id="ansOut" readonly></textarea>
+    <button class="s" onclick="copy('ansOut')">Copy / share reply</button>
+  </div>
+  <button id="listenBtn" class="hide" onclick="listen()">🔊 Tap to listen</button>
+</div>
+
+<div class="card"><span class="st" id="status">Not connected</span>
+<p id="hint">Keep the baby phone plugged in with this page open and the screen on. Both phones should stay on this page.</p></div>
+<audio id="audio" autoplay playsinline></audio>
+
+<script>
+const $=id=>document.getElementById(id);
+const cfg={iceServers:[{urls:'stun:stun.l.google.com:19302'}]};
+let pc,stream;
+const enc=d=>btoa(JSON.stringify(d)), dec=s=>JSON.parse(atob(s.trim()));
+const setStatus=t=>$('status').textContent=t;
+const gathered=pc=>new Promise(r=>{
+  if(pc.iceGatheringState==='complete')return r();
+  pc.addEventListener('icegatheringstatechange',()=>pc.iceGatheringState==='complete'&&r());
+  setTimeout(r,5000);
+});
+async function keepAwake(){try{await navigator.wakeLock.request('screen')}catch(e){}}
+function track(){
+  pc.onconnectionstatechange=()=>{
+    const s=pc.connectionState;
+    setStatus(s==='connected'?'✅ Connected':s==='failed'?'❌ Connection failed, restart both phones\' pages':'Connection: '+s);
+  };
+}
+async function copy(id){
+  const v=$(id).value;
+  try{ if(navigator.share){await navigator.share({text:v});return} }catch(e){}
+  try{await navigator.clipboard.writeText(v);setStatus('Copied')}catch(e){$(id).select()}
+}
+async function startBaby(){
+  $('home').classList.add('hide');$('baby').classList.remove('hide');
+  try{
+    stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true}});
+  }catch(e){setStatus('Mic blocked: '+e.message+'. Allow microphone access and reload.');return}
+  keepAwake();
+  pc=new RTCPeerConnection(cfg);track();
+  stream.getTracks().forEach(t=>pc.addTrack(t,stream));
+  setStatus('Creating code…');
+  await pc.setLocalDescription(await pc.createOffer());
+  await gathered(pc);
+  $('offerOut').value=enc(pc.localDescription);
+  setStatus('Waiting for parent phone');
+}
+async function finishBaby(){
+  try{await pc.setRemoteDescription(dec($('ansIn').value));setStatus('Connecting…')}
+  catch(e){setStatus('Invalid reply code')}
+}
+function showParent(){$('home').classList.add('hide');$('parent').classList.remove('hide')}
+async function startParent(){
+  try{
+    pc=new RTCPeerConnection(cfg);track();
+    pc.ontrack=e=>{$('audio').srcObject=e.streams[0];listen()};
+    await pc.setRemoteDescription(dec($('offerIn').value));
+    await pc.setLocalDescription(await pc.createAnswer());
+    setStatus('Creating reply…');
+    await gathered(pc);
+    $('ansOut').value=enc(pc.localDescription);
+    $('replyBox').classList.remove('hide');
+    keepAwake();
+    setStatus('Send reply to baby phone');
+  }catch(e){setStatus('Invalid code: '+e.message)}
+}
+function listen(){
+  $('audio').play().then(()=>$('listenBtn').classList.add('hide'))
+    .catch(()=>$('listenBtn').classList.remove('hide'));
+}
+</script></body></html>
